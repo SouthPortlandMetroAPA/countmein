@@ -126,16 +126,16 @@
             <label class="rc-choice maybe"><input type="radio" name="status" value="maybe"><span><span class="ic">🤔</span>Maybe</span></label>
             <label class="rc-choice no"><input type="radio" name="status" value="no"><span><span class="ic">🙁</span>Can't</span></label>
           </div>
-          <div class="err" id="statusErr"></div>
+          <div class="err" id="statusErr" role="alert" aria-live="assertive"></div>
         </fieldset>
 
         <label class="rc-label" for="name">Your name <span class="req">*</span></label>
         <input type="text" id="name" name="name" autocomplete="name" placeholder="First and last" required>
-        <div class="err" id="nameErr"></div>
+        <div class="err" id="nameErr" role="alert" aria-live="assertive"></div>
 
         <label class="rc-label" for="email">Your email <span class="req">*</span></label>
         <input type="email" id="email" name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
-        <div class="err" id="emailErr"></div>
+        <div class="err" id="emailErr" role="alert" aria-live="assertive"></div>
         <div style="font-size:.78rem;color:var(--muted);margin-top:5px">We'll send your confirmation here — and that's it.</div>
 
         <div id="guestsWrap" class="rc-hideable rc-hidden">
@@ -290,11 +290,14 @@
     const t = /^(\d{1,2}):(\d{2})$/.exec(ev.start_time || '');
     if(t){
       const p2 = n => (n<10?'0':'')+n;
-      let sh=+t[1], sm=+t[2], tot=sh*60+sm+180, eh=Math.floor(tot/60), emin=tot%60, endDay=+m[3];
-      if(eh>=24){ eh-=24; endDay+=1; }
+      let sh=+t[1], sm=+t[2], eh, emin, endMinFromStart;
       const et = /^(\d{1,2}):(\d{2})$/.exec(ev.end_time || '');
-      if(et){ eh=+et[1]; emin=+et[2]; endDay=+m[3]; }
-      const dates = dateStr+'T'+p2(sh)+p2(sm)+'00/'+m[1]+m[2]+p2(endDay)+'T'+p2(eh)+p2(emin)+'00';
+      if(et){ eh=+et[1]; emin=+et[2]; endMinFromStart=(eh*60+emin)-(sh*60+sm); if(endMinFromStart<=0) endMinFromStart+=1440; }
+      else { const totEnd=sh*60+sm+180; eh=Math.floor((totEnd%1440)/60); emin=totEnd%60; endMinFromStart=180; }
+      // Advance the date via Date.UTC so a late start rolls over month/year ends correctly.
+      const addDays=Math.floor((sh*60+sm+endMinFromStart)/1440);
+      const endD=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+addDays));
+      const dates = dateStr+'T'+p2(sh)+p2(sm)+'00/'+endD.getUTCFullYear()+p2(endD.getUTCMonth()+1)+p2(endD.getUTCDate())+'T'+p2(eh)+p2(emin)+'00';
       return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+dates+'&ctz=America/New_York&location='+encodeURIComponent(loc);
     }
     const next = new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+1));
