@@ -196,7 +196,7 @@
     const slugQ = params.get('event');
     const filter = slugQ ? 'slug=eq.' + encodeURIComponent(slugQ) : 'active=eq.true';
     try{
-      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,active&order=created_at.desc&limit=1',
+      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,active&order=created_at.desc&limit=1',
         { headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein' } });
       const rows = await r.json();
       _event = rows && rows[0];
@@ -223,6 +223,9 @@
       if(m) h += '<div class="rc-deadline">Please RSVP by ' + MON[+m[2]-1] + ' ' + (+m[3]) + '.</div>';
     }
     box.innerHTML = h;
+    // Operator-configurable hint for the note field (falls back to the default placeholder).
+    const noteEl = $('note');
+    if(noteEl && ev.note_hint && ev.note_hint.trim()) noteEl.placeholder = ev.note_hint.trim();
   }
 
   /* ── Guest stepper + reveal ── */
