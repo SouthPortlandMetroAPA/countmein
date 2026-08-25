@@ -27,6 +27,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RSVP — South Portland Metro APA</title>
+<!-- ── Social / Open Graph preview (STATIC so Facebook & other crawlers see it in
+     the initial HTML — they do NOT run our JS). EDIT THESE PER EVENT: swap the
+     title/description and drop a 1200×630 image at the og:image URL. ───────── -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="South Portland Metro APA">
+<meta property="og:title" content="You're Invited — SPM APA Party">
+<meta property="og:description" content="Tap to RSVP for the South Portland Metro APA party — let us know if you're coming!">
+<meta property="og:image" content="https://southportlandmetroapa.github.io/countmein/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://southportlandmetroapa.github.io/countmein/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="You're Invited — SPM APA Party">
+<meta name="twitter:description" content="Tap to RSVP for the South Portland Metro APA party.">
+<meta name="twitter:image" content="https://southportlandmetroapa.github.io/countmein/og-cover.jpg">
+<meta name="theme-color" content="#ea002a">
 <link rel="stylesheet" href="https://southportlandmetroapa.github.io/shared/spm-base.css">
 <script src="version.js"></script>
 <style>
@@ -139,7 +155,8 @@
         <div style="font-size:.78rem;color:var(--muted);margin-top:5px">We'll send your confirmation here — and that's it.</div>
 
         <div id="guestsWrap" class="rc-hideable rc-hidden">
-          <label class="rc-label" for="guestsOut">Guests you're bringing <span class="opt">(besides yourself)</span></label>
+          <label class="rc-label" for="guestsOut">People coming with you <span class="opt">(besides yourself)</span></label>
+          <div style="font-size:.85rem;color:var(--muted);margin:-2px 0 8px">Include children in your count.</div>
           <div class="rc-stepper">
             <button type="button" id="gMinus" aria-label="One fewer guest">−</button>
             <output id="guestsOut" for="gMinus gPlus">0</output>
@@ -301,7 +318,7 @@
       const addDays=Math.floor((sh*60+sm+endMinFromStart)/1440);
       const endD=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+addDays));
       const dates = dateStr+'T'+p2(sh)+p2(sm)+'00/'+endD.getUTCFullYear()+p2(endD.getUTCMonth()+1)+p2(endD.getUTCDate())+'T'+p2(eh)+p2(emin)+'00';
-      return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+dates+'&ctz=America/New_York&location='+encodeURIComponent(loc);
+      return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+dates+'&ctz=America/Los_Angeles&location='+encodeURIComponent(loc);  // Portland, OREGON → Pacific
     }
     const next = new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+1));
     const nextStr = ''+next.getUTCFullYear()+String(next.getUTCMonth()+1).padStart(2,'0')+String(next.getUTCDate()).padStart(2,'0');
@@ -330,6 +347,16 @@
   }
 
   /* ── Auto-updater (checkVersion → pollForDeploy; reference_deploy.md hardening) ── */
+  // Dotted-numeric version compare — NOT parseFloat (which breaks: 0.10 < 0.9).
+  // Returns 1 if a>b, -1 if a<b, 0 if equal. Compares each dot-segment numerically.
+  function cmpVer(a, b){
+    const pa = String(a).split('.'), pb = String(b).split('.');
+    for(let i=0; i<Math.max(pa.length, pb.length); i++){
+      const x = parseInt(pa[i], 10) || 0, y = parseInt(pb[i], 10) || 0;
+      if(x > y) return 1; if(x < y) return -1;
+    }
+    return 0;
+  }
   let _versionMismatch = false;
   async function checkVersion(){
     if(_versionMismatch) return;
@@ -339,7 +366,7 @@
       const rows = await r.json();
       const remote = rows && rows[0] && rows[0].version;
       if(!remote || remote === window.APP_VERSION) return;
-      if(parseFloat(remote) <= parseFloat(window.APP_VERSION)) return;  // older/rollback → don't strand
+      if(cmpVer(remote, window.APP_VERSION) <= 0) return;  // older/rollback → don't strand
       _versionMismatch = true;
       $('updateOverlay').classList.add('show');
       pollForDeploy();
@@ -352,7 +379,11 @@
         const r = await fetch('version.js?cb=' + Date.now(), { cache:'no-store' });
         const t = await r.text();
         const m = t.match(/APP_VERSION\s*=\s*'([0-9.]+)'/);
-        if(m && m[1] !== window.APP_VERSION){ location.replace(location.pathname + '?v=' + m[1]); return; }
+        if(m && m[1] !== window.APP_VERSION){
+          // Preserve ALL existing query params (esp. ?event=) — only set/update ?v=.
+          const u = new URL(location.href); u.searchParams.set('v', m[1]);
+          location.replace(u.pathname + u.search); return;
+        }
       }catch(e){}
       if(Date.now() - started < 120000) setTimeout(tick, 5000);
       else { $('updateOverlay').classList.remove('show'); _versionMismatch = false; }
