@@ -134,6 +134,9 @@
         <h2 id="evName">Loading the party details…</h2>
       </div>
 
+      <!-- APA-login gate (shown only when the event requires it AND you're not signed in) -->
+      <div id="loginGate" style="display:none"></div>
+
       <form id="form" novalidate>
         <fieldset class="rc-coming">
           <legend class="rc-label">Can you make it? <span class="req">*</span></legend>
@@ -213,12 +216,48 @@
     const slugQ = params.get('event');
     const filter = slugQ ? 'slug=eq.' + encodeURIComponent(slugQ) : 'active=eq.true';
     try{
-      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,active&order=created_at.desc&limit=1',
+      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,require_apa_login,active&order=created_at.desc&limit=1',
         { headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein' } });
       const rows = await r.json();
       _event = rows && rows[0];
     }catch(e){ _event = null; }
     renderEvent();
+  }
+
+  /* ── APA-login gate (only when the event has require_apa_login) ── */
+  const CMI_SKEY = 'countmein_session';
+  function cmiSession(){ try{ return JSON.parse(localStorage.getItem(CMI_SKEY) || 'null'); }catch(e){ return null; } }
+  function cmiSetSession(s){ try{ localStorage.setItem(CMI_SKEY, JSON.stringify(s)); }catch(e){} }
+  async function cmiPost(payload){ try{ const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify(payload) }); return await r.json(); }catch(e){ return { ok:false, error:'network' }; } }
+  // Magic-link boot: if a ?token is present, verify it, store the session, strip it from the URL.
+  async function cmiVerifyTokenIfPresent(){
+    const p = new URLSearchParams(location.search); const token = p.get('token');
+    if(!token) return;
+    const res = await cmiPost({ action:'cmi_verify', token });
+    if(res && res.ok){ cmiSetSession({ token, name:res.name||'', email:res.email||'', first:res.first_name||'' }); }
+    p.delete('token'); history.replaceState(null, '', location.pathname + (p.toString() ? '?'+p.toString() : ''));
+  }
+  function showLoginGate(){
+    $('form').style.display = 'none';
+    const gate = $('loginGate'); gate.style.display = '';
+    gate.innerHTML =
+      '<div class="rc-fact" style="display:block;margin-bottom:12px"><b>Members only</b>'+
+      '<span>This RSVP is for APA members — sign in with your email or APA number to continue.</span></div>'+
+      '<label class="rc-label" for="cmiId">Email or APA number</label>'+
+      '<input id="cmiId" type="text" autocomplete="email" inputmode="email" placeholder="you@example.com or 8-digit APA #">'+
+      '<input id="cmiHp" type="text" style="position:absolute;left:-9999px" tabindex="-1" autocomplete="off" aria-hidden="true">'+
+      '<div class="err" id="cmiErr" role="alert" aria-live="assertive"></div>'+
+      '<button class="spm-btn spm-btn-primary btn-full" id="cmiSend" type="button" style="margin-top:12px">Email me a sign-in link</button>';
+    $('cmiSend').addEventListener('click', async () => {
+      const v = $('cmiId').value.trim(); const err = $('cmiErr');
+      if(!v){ err.textContent = 'Enter your email or APA number.'; return; }
+      const b = $('cmiSend'); b.disabled = true; b.textContent = 'Sending…';
+      const res = await cmiPost({ action:'cmi_link_request', identifier:v, hp:$('cmiHp').value });
+      b.disabled = false; b.textContent = 'Email me a sign-in link';
+      if(!res || !res.ok){ err.textContent = (res && res.error) || 'Something went wrong. Try again.'; return; }
+      gate.innerHTML = '<div class="rc-fact" style="display:block"><b>Check your email 📧</b>'+
+        '<span>We sent a one-tap sign-in link'+(res.first_name?(', '+esc(res.first_name)):'')+'. Open it on this device to RSVP. The link works for 30 minutes.</span></div>';
+    });
   }
   function renderEvent(){
     const box = $('eventBox');
@@ -243,6 +282,17 @@
     // Operator-configurable hint for the note field (falls back to the default placeholder).
     const noteEl = $('note');
     if(noteEl && ev.note_hint && ev.note_hint.trim()) noteEl.placeholder = ev.note_hint.trim();
+
+    // APA-login gate: if the event requires it and there's no verified session, show the
+    // sign-in gate instead of the form. Signed-in members skip it (and get name/email
+    // pre-filled, with email locked to the identity they signed in as).
+    const sess = cmiSession();
+    if(ev.require_apa_login && !sess){ showLoginGate(); return; }
+    $('loginGate').style.display = 'none'; $('form').style.display = '';
+    if(ev.require_apa_login && sess){
+      if(sess.name && !$('name').value) $('name').value = sess.name;
+      if(sess.email){ $('email').value = sess.email; $('email').readOnly = true; }
+    }
   }
 
   /* ── Guest stepper + reveal ── */
@@ -282,9 +332,11 @@
     btn.disabled = true; btn.textContent = 'Sending…'; result.className = 'result';
     try{
       // text/plain (default for a string body) — no CORS preflight; GAS parses the raw JSON body.
+      const _s = cmiSession();
       const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify({
         action:'rsvp_submit', status, name, email,
         guests: (status === 'no' ? 0 : guests), note,
+        token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
         hp: $('company').value, ft: Date.now() - LOAD_TIME, source:'countmein-web'
       }) });
       const data = await r.json();
@@ -391,7 +443,8 @@
     tick();
   }
 
-  loadEvent();
+  // Verify a magic-link ?token first (stores the session + cleans the URL), then load.
+  (async () => { await cmiVerifyTokenIfPresent(); loadEvent(); })();
   setInterval(checkVersion, 30000);
 </script>
 </body>
