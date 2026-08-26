@@ -135,6 +135,7 @@
       </div>
 
       <!-- APA-login gate (shown only when the event requires it AND you're not signed in) -->
+      <div id="editBanner" class="rc-fact" style="display:none;margin-bottom:12px"></div>
       <div id="loginGate" style="display:none"></div>
 
       <form id="form" novalidate>
@@ -158,11 +159,11 @@
         <div style="font-size:.78rem;color:var(--muted);margin-top:5px">We'll send your confirmation here — and that's it.</div>
 
         <div id="guestsWrap" class="rc-hideable rc-hidden">
-          <label class="rc-label" for="guestsOut">People coming with you <span class="opt">(besides yourself)</span></label>
+          <label class="rc-label" for="guestsOut">Total people coming <span class="opt">(including you)</span></label>
           <div style="font-size:.85rem;color:var(--muted);margin:-2px 0 8px">Include children in your count.</div>
           <div class="rc-stepper">
             <button type="button" id="gMinus" aria-label="One fewer guest">−</button>
-            <output id="guestsOut" for="gMinus gPlus">0</output>
+            <output id="guestsOut" for="gMinus gPlus">1</output>
             <button type="button" id="gPlus" aria-label="One more guest">+</button>
           </div>
           <input type="hidden" id="guests" name="guests" value="0">
@@ -237,6 +238,49 @@
     if(res && res.ok){ cmiSetSession({ token, name:res.name||'', email:res.email||'', first:res.first_name||'' }); }
     p.delete('token'); history.replaceState(null, '', location.pathname + (p.toString() ? '?'+p.toString() : ''));
   }
+
+  /* ── Per-RSVP edit link ──────────────────────────────────────────────
+   * ?r=<uuid> is the ONLY credential on this path, so it is held in memory
+   * and stripped from the address bar immediately (same as ?token above) to
+   * keep it out of history, titles and referrers. The RPC returns the
+   * editable fields only — never the email or any other row.            */
+  let _editToken = null, _editRow = null;
+  async function cmiLoadEditIfPresent(){
+    const p = new URLSearchParams(location.search); const t = p.get('r');
+    if(!t) return;
+    _editToken = t;
+    p.delete('r'); history.replaceState(null, '', location.pathname + (p.toString() ? '?'+p.toString() : ''));
+    try{
+      const r = await fetch(SB_URL + '/rest/v1/rpc/rsvp_by_token', {
+        method:'POST',
+        headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein', 'Content-Profile':'countmein', 'Content-Type':'application/json' },
+        body: JSON.stringify({ p_token: t })
+      });
+      const rows = await r.json();
+      // An unknown token simply matches nothing. Fall through to a normal blank
+      // RSVP rather than announcing that the token was wrong.
+      _editRow = (Array.isArray(rows) && rows[0]) || null;
+      if(!_editRow) _editToken = null;
+    }catch(e){ _editRow = null; _editToken = null; }
+  }
+  function cmiApplyEditRow(){
+    if(!_editRow) return;
+    const st = document.querySelector('input[name=status][value="' + _editRow.status + '"]');
+    if(st){ st.checked = true; st.dispatchEvent(new Event('change', { bubbles:true })); }
+    if(_editRow.name) $('name').value = _editRow.name;
+    if(_editRow.note && $('note')) $('note').value = _editRow.note;
+    setGuests(Math.max(1, +_editRow.party_size || 1));
+    // Email is intentionally NOT returned by the RPC. The token identifies the
+    // row on submit, so the field can stay blank without creating a duplicate.
+    const banner = $('editBanner');
+    if(banner){
+      banner.style.display = '';
+      banner.innerHTML = '<b>Editing your RSVP</b><span>We found your RSVP' +
+        (_editRow.name ? ', ' + esc(_editRow.name.split(/\s+/)[0]) : '') +
+        '. Change anything below and send it again.</span>';
+    }
+    const btn = $('submit'); if(btn) btn.textContent = 'Update my RSVP';
+  }
   function showLoginGate(){
     $('form').style.display = 'none';
     const gate = $('loginGate'); gate.style.display = '';
@@ -296,8 +340,11 @@
   }
 
   /* ── Guest stepper + reveal ── */
-  let guests = 0;
-  function setGuests(n){ guests = Math.max(0, Math.min(20, n)); $('guestsOut').textContent = guests; $('guests').value = guests; }
+  // The stepper now counts TOTAL people INCLUDING the person RSVPing, so the
+  // floor is 1 and the value IS the party size. The wire field stays 'guests'
+  // for compatibility, but party_size below is what the server trusts.
+  let guests = 1;
+  function setGuests(n){ guests = Math.max(1, Math.min(20, n)); $('guestsOut').textContent = guests; $('guests').value = guests; }
   $('gMinus').addEventListener('click', () => setGuests(guests - 1));
   $('gPlus').addEventListener('click', () => setGuests(guests + 1));
   document.querySelectorAll('input[name=status]').forEach(r => r.addEventListener('change', () => {
@@ -335,8 +382,11 @@
       const _s = cmiSession();
       const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify({
         action:'rsvp_submit', status, name, email,
-        guests: (status === 'no' ? 0 : guests), note,
+        guests: (status === 'no' ? 0 : guests),
+        party_size: (status === 'no' ? 0 : guests),   // TOTAL incl. the submitter
+        note,
         token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
+        edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
         hp: $('company').value, ft: Date.now() - LOAD_TIME, source:'countmein-web'
       }) });
       const data = await r.json();
@@ -444,7 +494,7 @@
   }
 
   // Verify a magic-link ?token first (stores the session + cleans the URL), then load.
-  (async () => { await cmiVerifyTokenIfPresent(); loadEvent(); })();
+  (async () => { await cmiVerifyTokenIfPresent(); await cmiLoadEditIfPresent(); await loadEvent(); cmiApplyEditRow(); })();
   setInterval(checkVersion, 30000);
 </script>
 </body>
