@@ -57,6 +57,11 @@
   .rc-fact{ display:flex; gap:8px; font-size:.95rem; margin:4px 0; }
   .rc-fact b{ min-width:52px; color:var(--muted); font-weight:600; }
   .rc-desc{ margin:12px 0 0; font-size:.95rem; color:var(--text); white-space:pre-wrap; }
+  .cmi-idx{ display:block; border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-top:10px; text-decoration:none; color:var(--text); background:#fff; }
+  .cmi-idx:hover{ border-color:var(--spm-accent); box-shadow:0 2px 10px rgba(0,49,161,.10); }
+  .cmi-idx-n{ display:block; font-weight:700; color:var(--spm-accent); }
+  .cmi-idx-w{ display:block; font-size:.9rem; margin-top:2px; }
+  .cmi-idx-v{ display:block; font-size:.85rem; color:var(--muted); }
   .rc-deadline{ margin-top:10px; font-size:.85rem; color:var(--muted); }
 
   label.rc-label{ display:block; font-weight:600; font-size:.9rem; margin:16px 0 6px; }
@@ -213,17 +218,36 @@
     if(t){ let h=+t[1]; const ap=h<12?'AM':'PM'; let h12=h%12; if(h12===0)h12=12; s += ' at ' + h12 + ':' + t[2] + ' ' + ap; }
     return s;
   }
+  let _eventList = null;
   async function loadEvent(){
     const params = new URLSearchParams(location.search);
     const slugQ = params.get('event');
+    // ?event=<slug> opens one invite. The BARE link lists every open event, so
+    // the base URL is a usable directory instead of silently showing whichever
+    // event happened to be created last.
     const filter = slugQ ? 'slug=eq.' + encodeURIComponent(slugQ) : 'active=eq.true';
+    const limit  = slugQ ? '&limit=1' : '';
     try{
-      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,require_apa_login,active&order=created_at.desc&limit=1',
+      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,require_apa_login,active&order=event_date.asc' + limit,
         { headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein' } });
       const rows = await r.json();
-      _event = rows && rows[0];
+      if(!slugQ && Array.isArray(rows) && rows.length > 1){ _eventList = rows; _event = null; renderEventIndex(); return; }
+      _event = (Array.isArray(rows) && rows[0]) || null;
     }catch(e){ _event = null; }
     renderEvent();
+  }
+  function renderEventIndex(){
+    const box = $('eventBox'); const form = $('form');
+    if(form) form.style.display = 'none';
+    const lead = document.querySelector('.lead'); if(lead) lead.textContent = 'Pick the one you are RSVPing for.';
+    box.innerHTML = '<h2>Open invitations</h2>' +
+      _eventList.map(function(e){
+        const when = whenText(e);
+        return '<a class="cmi-idx" href="?event=' + encodeURIComponent(e.slug) + '">' +
+          '<span class="cmi-idx-n">' + esc(e.name) + (e.subtitle ? ' <span class="opt">' + esc(e.subtitle) + '</span>' : '') + '</span>' +
+          (when ? '<span class="cmi-idx-w">' + esc(when) + '</span>' : '') +
+          (e.venue ? '<span class="cmi-idx-v">' + esc(e.venue) + '</span>' : '') + '</a>';
+      }).join('');
   }
 
   /* ── APA-login gate (only when the event has require_apa_login) ── */
@@ -405,6 +429,7 @@
         note,
         token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
         edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
+        event_slug: (_event && _event.slug) || '',   // the event the page rendered — never "newest active"
         hp: $('company').value, ft: Date.now() - LOAD_TIME, source:'countmein-web'
       }) });
       const data = await r.json();
