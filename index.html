@@ -149,6 +149,7 @@
           <div class="err" id="statusErr" role="alert" aria-live="assertive"></div>
         </fieldset>
 
+        <div id="identityLocked" class="rc-fact" style="display:none;margin:14px 0 2px"></div>
         <label class="rc-label" for="name">Your name <span class="req">*</span></label>
         <input type="text" id="name" name="name" autocomplete="name" placeholder="First and last" required>
         <div class="err" id="nameErr" role="alert" aria-live="assertive"></div>
@@ -279,6 +280,23 @@
         (_editRow.name ? ', ' + esc(_editRow.name.split(/\s+/)[0]) : '') +
         '. Change anything below and send it again.</span>';
     }
+    // Identity is fixed on an edit link — the token already names the person, so
+    // the name and email aren't editable here. UI-only by design: the server
+    // still accepts a changed name/email, so this is a guardrail, not a gate.
+    const nm = $('name'), em = $('email');
+    if(nm){ nm.readOnly = true; nm.tabIndex = -1; nm.style.background = '#f3f4f6'; nm.style.color = '#6b7280'; }
+    if(em){
+      em.required = false;
+      const emLabel = document.querySelector('label[for="email"]');
+      if(emLabel) emLabel.style.display = 'none';
+      em.style.display = 'none';
+      const emErr = $('emailErr'); if(emErr) emErr.style.display = 'none';
+    }
+    const lock = $('identityLocked');
+    if(lock){
+      lock.style.display = 'block';
+      lock.innerHTML = '<b>Your details</b><span>This RSVP stays under the name and email you used. Need those changed? Just reply to your confirmation email.</span>';
+    }
     const btn = $('submit'); if(btn) btn.textContent = 'Update my RSVP';
   }
   function showLoginGate(){
@@ -372,7 +390,7 @@
     let bad = false, firstBad = null;
     if(!status){ $('statusErr').textContent = 'Let us know if you can make it.'; bad = true; firstBad = firstBad || document.querySelector('input[name=status]'); }
     if(!name){ $('nameErr').textContent = 'Please add your name.'; bad = true; firstBad = firstBad || $('name'); }
-    if(!isEmail(email)){ $('emailErr').textContent = 'Please enter a valid email address.'; bad = true; firstBad = firstBad || $('email'); }
+    if(!_editToken && !isEmail(email)){ $('emailErr').textContent = 'Please enter a valid email address.'; bad = true; firstBad = firstBad || $('email'); }
     if(bad){ if(firstBad) firstBad.focus(); return; }
 
     const btn = $('submit');
