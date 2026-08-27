@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<!--
+  CountMeIn — South Portland Metro APA · party RSVP (v0.1)
+  ─────────────────────────────────────────────────────────────────────────
+  A player opens the shared link, reads the party details, and RSVPs
+  (Yes / Maybe / No, name, email, guests, optional note). Submit POSTs to the
+  GAS apa-mailer `rsvp_submit` action (text/plain — NEVER application/json:
+  JSON triggers a CORS preflight GAS can't answer). Server-side that action
+  validates + throttles (honeypot + fill-timer + per-email cooldown), matches
+  the email → slate.players (best-effort, server-side — NOT a public roster
+  typeahead), upserts countmein.rsvps (service-role), sends a confirmation email
+  (with add-to-calendar) + notifies the operator. Re-submitting UPDATES.
+
+  The party details are read directly from countmein.events via the anon key
+  (RLS: anon SELECT gated to active=true — the invite is public; rsvps are NOT
+  anon-readable). Operators edit the event + view RSVPs in the Slate CountMeIn tab.
+
+  100% client-side, no secrets (anon key is public). Anti-abuse: honeypot +
+  fill-timer client-side, server cooldown + validation server-side.
+  Brand: shared spm-base.css. Auto-updater polls apa_core.apps → version.js.
+  Design grounded in RSVP-UX research (brief 2026-08-20): single screen, one
+  column, ask "coming?" first, reveal guests after Yes, native inputs, ≥48px
+  targets, aria-live confirmation, editable, no CAPTCHA.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSVP — South Portland Metro APA</title>
+<!-- ── Social / Open Graph preview (STATIC so Facebook & other crawlers see it in
+     the initial HTML — they do NOT run our JS). EDIT THESE PER EVENT: swap the
+     title/description and drop a 1200×630 image at the og:image URL. ───────── -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="South Portland Metro APA">
+<meta property="og:title" content="You're Invited — South Portland Metro APA Celebration">
+<meta property="og:description" content="Saturday, September 19 · 12pm – 5pm at Oaks Park · Portland. Tap to RSVP.">
+<meta property="og:image" content="https://southportlandmetroapa.github.io/countmein/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="https://southportlandmetroapa.github.io/countmein/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="You're Invited — South Portland Metro APA Celebration">
+<meta name="twitter:description" content="Saturday, September 19 · 12pm – 5pm at Oaks Park · Portland. Tap to RSVP.">
+<meta name="twitter:image" content="https://southportlandmetroapa.github.io/countmein/og-cover.jpg">
+<meta name="theme-color" content="#ea002a">
+<link rel="stylesheet" href="https://southportlandmetroapa.github.io/shared/spm-base.css">
+<script src="version.js"></script>
+<style>
+  /* App-specific bits over the shared SPM brand (tokens from spm-base.css:
+     --spm-primary #ea002a, --spm-accent #0031a1, --text, --muted, --border). */
+  .spm-page{ max-width:600px; }
+  .lead{ color:var(--muted); margin:2px 0 18px; font-size:1rem; }
+
+  .rc-event{ border:1px solid var(--border); border-radius:14px; padding:16px 16px 14px; margin-bottom:20px; background:#fbfbfd; }
+  .rc-event h2{ margin:0 0 2px; font-size:1.3rem; line-height:1.2; color:var(--spm-accent); }
+  .rc-event .rc-sub{ font-weight:600; color:var(--spm-primary); margin:0 0 10px; font-size:1rem; }
+  .rc-fact{ display:flex; gap:8px; font-size:.95rem; margin:4px 0; }
+  .rc-fact b{ min-width:52px; color:var(--muted); font-weight:600; }
+  .rc-desc{ margin:12px 0 0; font-size:.95rem; color:var(--text); white-space:pre-wrap; }
+  .cmi-idx{ display:block; border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-top:10px; text-decoration:none; color:var(--text); background:#fff; }
+  .cmi-idx:hover{ border-color:var(--spm-accent); box-shadow:0 2px 10px rgba(0,49,161,.10); }
+  .cmi-idx-n{ display:block; font-weight:700; color:var(--spm-accent); }
+  .cmi-idx-w{ display:block; font-size:.9rem; margin-top:2px; }
+  .cmi-idx-v{ display:block; font-size:.85rem; color:var(--muted); }
+  .rc-deadline{ margin-top:10px; font-size:.85rem; color:var(--muted); }
+
+  label.rc-label{ display:block; font-weight:600; font-size:.9rem; margin:16px 0 6px; }
+  .req{ color:var(--spm-primary); }
+  .opt{ color:var(--muted); font-weight:400; }
+
+  fieldset.rc-coming{ border:0; padding:0; margin:6px 0 0; }
+  legend.rc-label{ padding:0; }
+  .rc-choices{ display:flex; gap:10px; }
+  .rc-choice{ flex:1; position:relative; }
+  .rc-choice input{ position:absolute; opacity:0; width:1px; height:1px; }
+  .rc-choice span{ display:flex; align-items:center; justify-content:center; text-align:center;
+    min-height:56px; border:2px solid var(--border); border-radius:14px; font-weight:700; font-size:1rem;
+    cursor:pointer; background:#fff; color:var(--text); transition:all .12s; user-select:none; }
+  .rc-choice span .ic{ font-size:1.15rem; margin-right:6px; }
+  .rc-choice input:focus-visible + span{ outline:none; box-shadow:0 0 0 3px rgba(0,49,161,.28); }
+  .rc-choice:hover span{ border-color:#bbb; }
+  .rc-choice input:checked + span{ color:#fff; }
+  .rc-choice.yes   input:checked + span{ background:#16a34a; border-color:#16a34a; }
+  .rc-choice.maybe input:checked + span{ background:#f59e0b; border-color:#f59e0b; }
+  .rc-choice.no    input:checked + span{ background:var(--spm-primary); border-color:var(--spm-primary); }
+
+  input[type=text], input[type=email], textarea{
+    width:100%; font:inherit; font-size:1rem; color:var(--text); background:#fff;
+    border:1px solid var(--border); border-radius:12px; padding:13px 13px; min-height:26px;
+    transition:border-color .15s, box-shadow .15s; }
+  textarea{ resize:vertical; min-height:84px; }
+  input:focus, textarea:focus{ outline:none; border-color:var(--spm-accent); box-shadow:0 0 0 3px rgba(0,49,161,.15); }
+
+  .rc-stepper{ display:flex; align-items:center; gap:14px; }
+  .rc-stepper button{ width:52px; height:52px; border-radius:12px; border:1px solid var(--border);
+    background:#fff; font-size:1.6rem; line-height:1; color:var(--spm-accent); cursor:pointer; font-weight:700; }
+  .rc-stepper button:active{ transform:scale(.95); }
+  .rc-stepper output{ font-size:1.3rem; font-weight:700; min-width:2ch; text-align:center; }
+  .rc-hideable{ overflow:hidden; }
+  .rc-hidden{ display:none; }
+
+  .err{ color:var(--spm-primary); font-size:.82rem; margin-top:5px; min-height:16px; }
+  .hp{ position:absolute; left:-9999px; top:-9999px; width:1px; height:1px; overflow:hidden; }
+  .spm-btn.btn-full{ width:100%; margin-top:22px; }
+  .spm-btn:disabled{ opacity:.6; cursor:default; filter:none; transform:none; }
+  .note{ margin-top:14px; font-size:.8rem; color:var(--muted); text-align:center; }
+
+  .result{ margin-top:16px; border-radius:14px; padding:16px 16px; font-size:.98rem; display:none; }
+  .result.show{ display:block; }
+  .result.ok{ background:#e8f6ec; color:#14532d; border:1px solid #bbe6c7; }
+  .result.maybe{ background:#fef6e7; color:#7a4b06; border:1px solid #f3ddab; }
+  .result.bad{ background:#fce8ea; color:#a02030; border:1px solid #f3c2c8; }
+  .result h2{ margin:0 0 6px; font-size:1.1rem; }
+  .result p{ margin:0 0 6px; }
+  .result a.cal{ display:inline-block; margin-top:6px; font-weight:700; color:var(--spm-accent); text-decoration:none; }
+  .result a.cal:hover{ text-decoration:underline; }
+  a.again{ color:var(--spm-accent); font-weight:700; cursor:pointer; text-decoration:none; }
+  a.again:hover{ text-decoration:underline; }
+
+  #updateOverlay{ position:fixed; inset:0; background:rgba(255,255,255,.96); z-index:9999;
+    display:none; align-items:center; justify-content:center; flex-direction:column; gap:14px; text-align:center; padding:24px; }
+  #updateOverlay.show{ display:flex; }
+  #updateOverlay .sp{ width:42px; height:42px; border:4px solid #e5e7eb; border-top-color:var(--spm-primary);
+    border-radius:50%; animation:rcspin 1s linear infinite; }
+  @keyframes rcspin{ to{ transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div id="updateOverlay"><div class="sp"></div><div><b>Updating…</b><br>Grabbing the latest version.</div></div>
+
+  <div class="spm-page">
+    <header class="spm-header">
+      <h1>You're Invited! 🎉</h1>
+      <p class="spm-subtitle">South Portland Metro APA</p>
+    </header>
+
+    <main class="spm-card">
+      <div id="eventBox" class="rc-event" aria-live="polite">
+        <h2 id="evName">Loading the party details…</h2>
+      </div>
+
+      <!-- APA-login gate (shown only when the event requires it AND you're not signed in) -->
+      <div id="editBanner" class="rc-fact" style="display:none;margin-bottom:12px"></div>
+      <div id="loginGate" style="display:none"></div>
+
+      <form id="form" novalidate>
+        <fieldset class="rc-coming">
+          <legend class="rc-label">Can you make it? <span class="req">*</span></legend>
+          <div class="rc-choices">
+            <label class="rc-choice yes"><input type="radio" name="status" value="yes"><span><span class="ic">✅</span>I'm in</span></label>
+            <label class="rc-choice maybe"><input type="radio" name="status" value="maybe"><span><span class="ic">🤔</span>Maybe</span></label>
+            <label class="rc-choice no"><input type="radio" name="status" value="no"><span><span class="ic">🙁</span>Can't</span></label>
+          </div>
+          <div class="err" id="statusErr" role="alert" aria-live="assertive"></div>
+        </fieldset>
+
+        <div id="identityLocked" class="rc-fact" style="display:none;margin:14px 0 2px"></div>
+        <label class="rc-label" for="name">Your name <span class="req">*</span></label>
+        <input type="text" id="name" name="name" autocomplete="name" placeholder="First and last" required>
+        <div class="err" id="nameErr" role="alert" aria-live="assertive"></div>
+
+        <label class="rc-label" for="email">Your email <span class="req">*</span></label>
+        <input type="email" id="email" name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+        <div class="err" id="emailErr" role="alert" aria-live="assertive"></div>
+        <div style="font-size:.78rem;color:var(--muted);margin-top:5px">We'll send your confirmation here — and that's it.</div>
+
+        <div id="guestsWrap" class="rc-hideable rc-hidden">
+          <label class="rc-label" for="guestsOut">Total people coming <span class="opt">(including you)</span></label>
+          <div style="font-size:.85rem;color:var(--muted);margin:-2px 0 8px">Include children in your count.</div>
+          <div class="rc-stepper">
+            <button type="button" id="gMinus" aria-label="One fewer guest">−</button>
+            <output id="guestsOut" for="gMinus gPlus">1</output>
+            <button type="button" id="gPlus" aria-label="One more guest">+</button>
+          </div>
+          <input type="hidden" id="guests" name="guests" value="0">
+        </div>
+
+        <label class="rc-label" for="note">Anything we should know? <span class="opt">(optional)</span></label>
+        <textarea id="note" name="note" placeholder="Dietary needs, a note, a shout — totally optional" maxlength="2000"></textarea>
+
+        <!-- honeypot: off-screen (not display:none), humans never see or fill it -->
+        <div class="hp" aria-hidden="true">
+          <label for="company">Company</label>
+          <input type="text" id="company" name="hp" tabindex="-1" autocomplete="off">
+        </div>
+
+        <button type="submit" id="submit" class="spm-btn spm-btn-primary btn-full">Send my RSVP</button>
+        <div class="note">Plans change? Come back to this link and re-submit — your latest answer wins.</div>
+      </form>
+
+      <div class="result" id="result" role="status" aria-live="polite" tabindex="-1"></div>
+    </main>
+
+    <div class="spm-footer">CountMeIn v<span id="verLabel"></span> · South Portland Metro APA</div>
+  </div>
+
+<script>
+  const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
+  const ANON    = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbzGTzkBRTrIIP_tD6sbtOOUmNZkXDdtxPoO4c8fdWt5h3tZFueNSISPv8Q3LWStx73Whw/exec';
+  /* Environment is derived from the URL, never hardcoded, so the same file
+     serves both places. Each environment polls its OWN apa_core.apps row —
+     bumping one must not drag the other into an update overlay. */
+  const APP_NAME_BASE = 'CountMeIn';
+  const IS_PREPROD    = /\/preprod\//.test(location.pathname);
+  const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
+  const LOAD_TIME = Date.now();
+  const $ = id => document.getElementById(id);
+  const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+  document.getElementById('verLabel').textContent = window.APP_VERSION + (IS_PREPROD ? ' preprod' : '');
+  if (IS_PREPROD) {
+    const bar = document.createElement('div');
+    bar.setAttribute('data-preprod-banner', '1');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;'
+      + 'background:#b45309;color:#fff;font:700 13px/1.35 system-ui,sans-serif;'
+      + 'padding:7px 12px;text-align:center;letter-spacing:.02em';
+    bar.textContent = 'PREPROD — test page. RSVPs submitted here are written to the REAL database '
+      + 'and email the address you type. Do not share this link.';
+    document.addEventListener('DOMContentLoaded', () => {
+      document.body.appendChild(bar);
+      document.body.style.paddingTop = '34px';
+    });
+  }
+
+  let _event = null;
+
+  /* ── Event details (anon read; RLS gates to active=true) ── */
+  const MON = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const DOW = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  function whenText(ev){
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ev.event_date || ''); if(!m) return '';
+    const y=+m[1], mo=+m[2], d=+m[3];
+    let s = DOW[new Date(Date.UTC(y,mo-1,d)).getUTCDay()] + ', ' + MON[mo-1] + ' ' + d + ', ' + y;
+    const t = /^(\d{1,2}):(\d{2})$/.exec(ev.start_time || '');
+    if(t){ let h=+t[1]; const ap=h<12?'AM':'PM'; let h12=h%12; if(h12===0)h12=12; s += ' at ' + h12 + ':' + t[2] + ' ' + ap; }
+    return s;
+  }
+  let _eventList = null;
+  async function loadEvent(){
+    const params = new URLSearchParams(location.search);
+    const slugQ = params.get('event');
+    // ?event=<slug> opens one invite. The BARE link lists every open event, so
+    // the base URL is a usable directory instead of silently showing whichever
+    // event happened to be created last.
+    const filter = slugQ ? 'slug=eq.' + encodeURIComponent(slugQ) : 'active=eq.true';
+    const limit  = slugQ ? '&limit=1' : '';
+    try{
+      const r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,require_apa_login,active&order=event_date.asc' + limit,
+        { headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein' } });
+      const rows = await r.json();
+      if(!slugQ && Array.isArray(rows) && rows.length > 1){ _eventList = rows; _event = null; renderEventIndex(); return; }
+      _event = (Array.isArray(rows) && rows[0]) || null;
+    }catch(e){ _event = null; }
+    renderEvent();
+  }
+  function renderEventIndex(){
+    const box = $('eventBox'); const form = $('form');
+    if(form) form.style.display = 'none';
+    const lead = document.querySelector('.lead'); if(lead) lead.textContent = 'Pick the one you are RSVPing for.';
+    box.innerHTML = '<h2>Open invitations</h2>' +
+      _eventList.map(function(e){
+        const when = whenText(e);
+        return '<a class="cmi-idx" href="?event=' + encodeURIComponent(e.slug) + '">' +
+          '<span class="cmi-idx-n">' + esc(e.name) + (e.subtitle ? ' <span class="opt">' + esc(e.subtitle) + '</span>' : '') + '</span>' +
+          (when ? '<span class="cmi-idx-w">' + esc(when) + '</span>' : '') +
+          (e.venue ? '<span class="cmi-idx-v">' + esc(e.venue) + '</span>' : '') + '</a>';
+      }).join('');
+  }
+
+  /* ── APA-login gate (only when the event has require_apa_login) ── */
+  const CMI_SKEY = 'countmein_session';
+  function cmiSession(){ try{ return JSON.parse(localStorage.getItem(CMI_SKEY) || 'null'); }catch(e){ return null; } }
+  function cmiSetSession(s){ try{ localStorage.setItem(CMI_SKEY, JSON.stringify(s)); }catch(e){} }
+  async function cmiPost(payload){ try{ const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify(payload) }); return await r.json(); }catch(e){ return { ok:false, error:'network' }; } }
+  // Magic-link boot: if a ?token is present, verify it, store the session, strip it from the URL.
+  async function cmiVerifyTokenIfPresent(){
+    const p = new URLSearchParams(location.search); const token = p.get('token');
+    if(!token) return;
+    const res = await cmiPost({ action:'cmi_verify', token });
+    if(res && res.ok){ cmiSetSession({ token, name:res.name||'', email:res.email||'', first:res.first_name||'' }); }
+    p.delete('token'); history.replaceState(null, '', location.pathname + (p.toString() ? '?'+p.toString() : ''));
+  }
+
+  /* ── Per-RSVP edit link ──────────────────────────────────────────────
+   * ?r=<uuid> is the ONLY credential on this path, so it is held in memory
+   * and stripped from the address bar immediately (same as ?token above) to
+   * keep it out of history, titles and referrers. The RPC returns the
+   * editable fields only — never the email or any other row.            */
+  let _editToken = null, _editRow = null;
+  async function cmiLoadEditIfPresent(){
+    const p = new URLSearchParams(location.search); const t = p.get('r');
+    if(!t) return;
+    _editToken = t;
+    p.delete('r'); history.replaceState(null, '', location.pathname + (p.toString() ? '?'+p.toString() : ''));
+    try{
+      const r = await fetch(SB_URL + '/rest/v1/rpc/rsvp_by_token', {
+        method:'POST',
+        headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'countmein', 'Content-Profile':'countmein', 'Content-Type':'application/json' },
+        body: JSON.stringify({ p_token: t })
+      });
+      const rows = await r.json();
+      // An unknown token simply matches nothing. Fall through to a normal blank
+      // RSVP rather than announcing that the token was wrong.
+      _editRow = (Array.isArray(rows) && rows[0]) || null;
+      if(!_editRow) _editToken = null;
+    }catch(e){ _editRow = null; _editToken = null; }
+  }
+  function cmiApplyEditRow(){
+    if(!_editRow) return;
+    const st = document.querySelector('input[name=status][value="' + _editRow.status + '"]');
+    if(st){ st.checked = true; st.dispatchEvent(new Event('change', { bubbles:true })); }
+    if(_editRow.name) $('name').value = _editRow.name;
+    if(_editRow.note && $('note')) $('note').value = _editRow.note;
+    setGuests(Math.max(1, +_editRow.party_size || 1));
+    // Email is intentionally NOT returned by the RPC. The token identifies the
+    // row on submit, so the field can stay blank without creating a duplicate.
+    const banner = $('editBanner');
+    if(banner){
+      banner.style.display = '';
+      banner.innerHTML = '<b>Editing your RSVP</b><span>We found your RSVP' +
+        (_editRow.name ? ', ' + esc(_editRow.name.split(/\s+/)[0]) : '') +
+        '. Change anything below and send it again.</span>';
+    }
+    // Identity is fixed on an edit link — the token already names the person, so
+    // the name and email aren't editable here. UI-only by design: the server
+    // still accepts a changed name/email, so this is a guardrail, not a gate.
+    const nm = $('name'), em = $('email');
+    if(nm){ nm.readOnly = true; nm.tabIndex = -1; nm.style.background = '#f3f4f6'; nm.style.color = '#6b7280'; }
+    if(em){
+      em.required = false;
+      const emLabel = document.querySelector('label[for="email"]');
+      if(emLabel) emLabel.style.display = 'none';
+      em.style.display = 'none';
+      const emErr = $('emailErr'); if(emErr) emErr.style.display = 'none';
+    }
+    const lock = $('identityLocked');
+    if(lock){
+      lock.style.display = 'block';
+      lock.innerHTML = '<b>Your details</b><span>This RSVP stays under the name and email you used. Need those changed? Just reply to your confirmation email.</span>';
+    }
+    const btn = $('submit'); if(btn) btn.textContent = 'Update my RSVP';
+  }
+  function showLoginGate(){
+    $('form').style.display = 'none';
+    const gate = $('loginGate'); gate.style.display = '';
+    gate.innerHTML =
+      '<div class="rc-fact" style="display:block;margin-bottom:12px"><b>Members only</b>'+
+      '<span>This RSVP is for APA members — sign in with your email or APA number to continue.</span></div>'+
+      '<label class="rc-label" for="cmiId">Email or APA number</label>'+
+      '<input id="cmiId" type="text" autocomplete="email" inputmode="email" placeholder="you@example.com or 8-digit APA #">'+
+      '<input id="cmiHp" type="text" style="position:absolute;left:-9999px" tabindex="-1" autocomplete="off" aria-hidden="true">'+
+      '<div class="err" id="cmiErr" role="alert" aria-live="assertive"></div>'+
+      '<button class="spm-btn spm-btn-primary btn-full" id="cmiSend" type="button" style="margin-top:12px">Email me a sign-in link</button>';
+    $('cmiSend').addEventListener('click', async () => {
+      const v = $('cmiId').value.trim(); const err = $('cmiErr');
+      if(!v){ err.textContent = 'Enter your email or APA number.'; return; }
+      const b = $('cmiSend'); b.disabled = true; b.textContent = 'Sending…';
+      const res = await cmiPost({ action:'cmi_link_request', identifier:v, hp:$('cmiHp').value });
+      b.disabled = false; b.textContent = 'Email me a sign-in link';
+      if(!res || !res.ok){ err.textContent = (res && res.error) || 'Something went wrong. Try again.'; return; }
+      gate.innerHTML = '<div class="rc-fact" style="display:block"><b>Check your email 📧</b>'+
+        '<span>We sent a one-tap sign-in link'+(res.first_name?(', '+esc(res.first_name)):'')+'. Open it on this device to RSVP. The link works for 30 minutes.</span></div>';
+    });
+  }
+  function renderEvent(){
+    const box = $('eventBox');
+    if(!_event){
+      box.innerHTML = '<h2>RSVPs aren\'t open just yet</h2><p class="rc-desc">Check back soon — the invite is on its way.</p>';
+      $('form').style.display = 'none';
+      return;
+    }
+    const ev = _event;
+    const when = whenText(ev);
+    const where = [ev.venue, ev.address].filter(Boolean).join(', ');
+    let h = '<h2>' + esc(ev.name) + '</h2>';
+    if(ev.subtitle) h += '<p class="rc-sub">' + esc(ev.subtitle) + '</p>';
+    if(when)  h += '<div class="rc-fact"><b>When</b><span>' + esc(when) + '</span></div>';
+    if(where) h += '<div class="rc-fact"><b>Where</b><span>' + esc(where) + '</span></div>';
+    if(ev.description) h += '<p class="rc-desc">' + esc(ev.description) + '</p>';
+    if(ev.rsvp_by){
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ev.rsvp_by);
+      if(m) h += '<div class="rc-deadline">Please RSVP by ' + MON[+m[2]-1] + ' ' + (+m[3]) + '.</div>';
+    }
+    box.innerHTML = h;
+    // Operator-configurable hint for the note field (falls back to the default placeholder).
+    const noteEl = $('note');
+    if(noteEl && ev.note_hint && ev.note_hint.trim()) noteEl.placeholder = ev.note_hint.trim();
+
+    // APA-login gate: if the event requires it and there's no verified session, show the
+    // sign-in gate instead of the form. Signed-in members skip it (and get name/email
+    // pre-filled, with email locked to the identity they signed in as).
+    const sess = cmiSession();
+    if(ev.require_apa_login && !sess){ showLoginGate(); return; }
+    $('loginGate').style.display = 'none'; $('form').style.display = '';
+    if(ev.require_apa_login && sess){
+      if(sess.name && !$('name').value) $('name').value = sess.name;
+      if(sess.email){ $('email').value = sess.email; $('email').readOnly = true; }
+    }
+  }
+
+  /* ── Guest stepper + reveal ── */
+  // The stepper now counts TOTAL people INCLUDING the person RSVPing, so the
+  // floor is 1 and the value IS the party size. The wire field stays 'guests'
+  // for compatibility, but party_size below is what the server trusts.
+  let guests = 1;
+  function setGuests(n){ guests = Math.max(1, Math.min(20, n)); $('guestsOut').textContent = guests; $('guests').value = guests; }
+  $('gMinus').addEventListener('click', () => setGuests(guests - 1));
+  $('gPlus').addEventListener('click', () => setGuests(guests + 1));
+  document.querySelectorAll('input[name=status]').forEach(r => r.addEventListener('change', () => {
+    const coming = r.value === 'yes' || r.value === 'maybe';
+    $('guestsWrap').classList.toggle('rc-hidden', !coming);
+    $('statusErr').textContent = '';
+  }));
+
+  /* ── Submit ── */
+  const form = $('form'), result = $('result');
+  function showResult(kind, title, bodyHtml){
+    result.className = 'result show ' + kind;
+    result.innerHTML = '<h2>' + title + '</h2>' + bodyHtml;
+    result.focus();
+  }
+  function selectedStatus(){ const el = document.querySelector('input[name=status]:checked'); return el ? el.value : ''; }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    ['statusErr','nameErr','emailErr'].forEach(id => $(id).textContent = '');
+    const status = selectedStatus();
+    const name = $('name').value.trim();
+    const email = $('email').value.trim();
+    const note = $('note').value.trim();
+    let bad = false, firstBad = null;
+    if(!status){ $('statusErr').textContent = 'Let us know if you can make it.'; bad = true; firstBad = firstBad || document.querySelector('input[name=status]'); }
+    if(!name){ $('nameErr').textContent = 'Please add your name.'; bad = true; firstBad = firstBad || $('name'); }
+    if(!_editToken && !isEmail(email)){ $('emailErr').textContent = 'Please enter a valid email address.'; bad = true; firstBad = firstBad || $('email'); }
+    if(bad){ if(firstBad) firstBad.focus(); return; }
+
+    const btn = $('submit');
+    btn.disabled = true; btn.textContent = 'Sending…'; result.className = 'result';
+    try{
+      // text/plain (default for a string body) — no CORS preflight; GAS parses the raw JSON body.
+      const _s = cmiSession();
+      const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify({
+        action:'rsvp_submit', status, name, email,
+        guests: (status === 'no' ? 0 : guests),
+        party_size: (status === 'no' ? 0 : guests),   // TOTAL incl. the submitter
+        note,
+        token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
+        edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
+        event_slug: (_event && _event.slug) || '',   // the event the page rendered — never "newest active"
+        hp: $('company').value, ft: Date.now() - LOAD_TIME,
+        /* Preprod writes to the PRODUCTION table — there is no separate
+           database. Stamping the source is what makes a test row findable
+           and deletable afterwards instead of silently inflating the
+           headcount the caterer is quoted from. */
+        source: IS_PREPROD ? 'countmein-preprod' : 'countmein-web'
+      }) });
+      const data = await r.json();
+      if(data && data.ok){
+        form.style.display = 'none';
+        renderSuccess(status, name, data);
+      }else{
+        btn.disabled = false; btn.textContent = 'Send my RSVP';
+        showResult('bad', 'Hmm, that didn\'t go through', '<p>' + esc((data && data.error) || 'Please try again in a moment.') + '</p>');
+      }
+    }catch(err){
+      btn.disabled = false; btn.textContent = 'Send my RSVP';
+      showResult('bad', 'Connection problem', '<p>We couldn\'t reach the server. Check your connection and try again.</p>');
+    }
+  });
+
+  function gcalLink(){
+    const ev = _event; if(!ev || !ev.event_date) return '';
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ev.event_date); if(!m) return '';
+    const dateStr = m[1]+m[2]+m[3];
+    const title = ev.name + (ev.subtitle ? ' — ' + ev.subtitle : '');
+    const loc = [ev.venue, ev.address].filter(Boolean).join(', ');
+    const t = /^(\d{1,2}):(\d{2})$/.exec(ev.start_time || '');
+    if(t){
+      const p2 = n => (n<10?'0':'')+n;
+      let sh=+t[1], sm=+t[2], eh, emin, endMinFromStart;
+      const et = /^(\d{1,2}):(\d{2})$/.exec(ev.end_time || '');
+      if(et){ eh=+et[1]; emin=+et[2]; endMinFromStart=(eh*60+emin)-(sh*60+sm); if(endMinFromStart<=0) endMinFromStart+=1440; }
+      else { const totEnd=sh*60+sm+180; eh=Math.floor((totEnd%1440)/60); emin=totEnd%60; endMinFromStart=180; }
+      // Advance the date via Date.UTC so a late start rolls over month/year ends correctly.
+      const addDays=Math.floor((sh*60+sm+endMinFromStart)/1440);
+      const endD=new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+addDays));
+      const dates = dateStr+'T'+p2(sh)+p2(sm)+'00/'+endD.getUTCFullYear()+p2(endD.getUTCMonth()+1)+p2(endD.getUTCDate())+'T'+p2(eh)+p2(emin)+'00';
+      return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+dates+'&ctz=America/Los_Angeles&location='+encodeURIComponent(loc);  // Portland, OREGON → Pacific
+    }
+    const next = new Date(Date.UTC(+m[1],+m[2]-1,+m[3]+1));
+    const nextStr = ''+next.getUTCFullYear()+String(next.getUTCMonth()+1).padStart(2,'0')+String(next.getUTCDate()).padStart(2,'0');
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent(title)+'&dates='+dateStr+'/'+nextStr+'&location='+encodeURIComponent(loc);
+  }
+
+  function renderSuccess(status, name, data){
+    const first = (name.split(/\s+/)[0] || 'friend');
+    const size = data.party_size || 1;
+    if(status === 'no'){
+      showResult('bad', 'Thanks for letting us know 💙',
+        '<p>We\'ll miss you, ' + esc(first) + ' — catch you at the tables. Change your mind? Just re-submit anytime.</p>' +
+        '<p><a class="again" onclick="location.reload()">Change my answer</a></p>');
+      return;
+    }
+    const kind = status === 'maybe' ? 'maybe' : 'ok';
+    const head = status === 'maybe' ? 'Got it — you\'re a maybe 🤔' : 'You\'re in, ' + esc(first) + '! 🎉';
+    let body = '<p>' + (status === 'maybe'
+        ? 'We\'ve saved your maybe. Hope you can make it!'
+        : 'Party of ' + size + (size > 1 ? ' (you + ' + (size-1) + ' guest' + (size-1===1?'':'s') + ')' : ' (just you)') + '. We can\'t wait to celebrate with you!') +
+      ' A confirmation is on its way to your inbox' + (data.updated ? ' (your RSVP was updated)' : '') + '.</p>';
+    const g = gcalLink();
+    if(g) body += '<p><a class="cal" href="' + g + '" target="_blank" rel="noopener">📅 Add to Google Calendar</a></p>';
+    body += '<p><a class="again" onclick="location.reload()">Change my answer</a></p>';
+    showResult(kind, head, body);
+  }
+
+  /* ── Auto-updater (checkVersion → pollForDeploy; reference_deploy.md hardening) ── */
+  // Dotted-numeric version compare — NOT parseFloat (which breaks: 0.10 < 0.9).
+  // Returns 1 if a>b, -1 if a<b, 0 if equal. Compares each dot-segment numerically.
+  function cmpVer(a, b){
+    const pa = String(a).split('.'), pb = String(b).split('.');
+    for(let i=0; i<Math.max(pa.length, pb.length); i++){
+      const x = parseInt(pa[i], 10) || 0, y = parseInt(pb[i], 10) || 0;
+      if(x > y) return 1; if(x < y) return -1;
+    }
+    return 0;
+  }
+  let _versionMismatch = false;
+  async function checkVersion(){
+    if(_versionMismatch) return;
+    try{
+      const r = await fetch(SB_URL + '/rest/v1/apps?app_name=eq.' + APP_NAME + '&select=version',
+        { headers:{ apikey:ANON, Authorization:'Bearer '+ANON, 'Accept-Profile':'apa_core' } });
+      const rows = await r.json();
+      const remote = rows && rows[0] && rows[0].version;
+      if(!remote || remote === window.APP_VERSION) return;
+      if(cmpVer(remote, window.APP_VERSION) <= 0) return;  // older/rollback → don't strand
+      _versionMismatch = true;
+      $('updateOverlay').classList.add('show');
+      pollForDeploy();
+    }catch(e){}
+  }
+  function pollForDeploy(){
+    const started = Date.now();
+    const tick = async () => {
+      try{
+        const r = await fetch('version.js?cb=' + Date.now(), { cache:'no-store' });
+        const t = await r.text();
+        const m = t.match(/APP_VERSION\s*=\s*'([0-9.]+)'/);
+        if(m && m[1] !== window.APP_VERSION){
+          // Preserve ALL existing query params (esp. ?event=) — only set/update ?v=.
+          const u = new URL(location.href); u.searchParams.set('v', m[1]);
+          location.replace(u.pathname + u.search); return;
+        }
+      }catch(e){}
+      if(Date.now() - started < 120000) setTimeout(tick, 5000);
+      else { $('updateOverlay').classList.remove('show'); _versionMismatch = false; }
+    };
+    tick();
+  }
+
+  // Verify a magic-link ?token first (stores the session + cleans the URL), then load.
+  (async () => { await cmiVerifyTokenIfPresent(); await cmiLoadEditIfPresent(); await loadEvent(); cmiApplyEditRow(); })();
+  setInterval(checkVersion, 30000);
+</script>
+</body>
+</html>
