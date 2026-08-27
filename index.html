@@ -198,12 +198,30 @@
   const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
   const ANON    = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbzGTzkBRTrIIP_tD6sbtOOUmNZkXDdtxPoO4c8fdWt5h3tZFueNSISPv8Q3LWStx73Whw/exec';
-  const APP_NAME = 'CountMeIn';
+  /* Environment is derived from the URL, never hardcoded, so the same file
+     serves both places. Each environment polls its OWN apa_core.apps row —
+     bumping one must not drag the other into an update overlay. */
+  const APP_NAME_BASE = 'CountMeIn';
+  const IS_PREPROD    = /\/preprod\//.test(location.pathname);
+  const APP_NAME      = IS_PREPROD ? APP_NAME_BASE + '-preprod' : APP_NAME_BASE;
   const LOAD_TIME = Date.now();
   const $ = id => document.getElementById(id);
   const isEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
-  document.getElementById('verLabel').textContent = window.APP_VERSION;
+  document.getElementById('verLabel').textContent = window.APP_VERSION + (IS_PREPROD ? ' preprod' : '');
+  if (IS_PREPROD) {
+    const bar = document.createElement('div');
+    bar.setAttribute('data-preprod-banner', '1');
+    bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;'
+      + 'background:#b45309;color:#fff;font:700 13px/1.35 system-ui,sans-serif;'
+      + 'padding:7px 12px;text-align:center;letter-spacing:.02em';
+    bar.textContent = 'PREPROD — test page. RSVPs submitted here are written to the REAL database '
+      + 'and email the address you type. Do not share this link.';
+    document.addEventListener('DOMContentLoaded', () => {
+      document.body.appendChild(bar);
+      document.body.style.paddingTop = '34px';
+    });
+  }
 
   let _event = null;
 
@@ -430,7 +448,12 @@
         token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
         edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
         event_slug: (_event && _event.slug) || '',   // the event the page rendered — never "newest active"
-        hp: $('company').value, ft: Date.now() - LOAD_TIME, source:'countmein-web'
+        hp: $('company').value, ft: Date.now() - LOAD_TIME,
+        /* Preprod writes to the PRODUCTION table — there is no separate
+           database. Stamping the source is what makes a test row findable
+           and deletable afterwards instead of silently inflating the
+           headcount the caterer is quoted from. */
+        source: IS_PREPROD ? 'countmein-preprod' : 'countmein-web'
       }) });
       const data = await r.json();
       if(data && data.ok){
