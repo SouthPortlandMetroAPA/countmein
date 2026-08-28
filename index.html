@@ -165,6 +165,8 @@
       <div id="editBanner" class="rc-fact" style="display:none;margin-bottom:12px"></div>
       <div id="loginGate" style="display:none"></div>
 
+      <div id="cmiBackBanner" class="rc-fact" style="display:none;margin-bottom:12px"></div>
+
       <form id="form" novalidate>
         <fieldset class="rc-coming">
           <legend class="rc-label">Can you make it? <span class="req">*</span></legend>
@@ -294,6 +296,7 @@
       _event = (Array.isArray(rows) && rows[0]) || null;
     }catch(e){ _event = null; }
     renderEvent();
+    try{ cmiRestore(); }catch(e){ /* a bad stored blob must never block the form */ }
   }
   function renderEventIndex(){
     const box = $('eventBox'); const form = $('form');
@@ -560,6 +563,75 @@
   }
   function selectedStatus(){ const el = document.querySelector('input[name=status]:checked'); return el ? el.value : ''; }
 
+  /* ── Remember this device's last answer for THIS event ──────────────
+     Keyed per event slug so a second event never inherits the first one's
+     answer. Only what the guest typed, only on their own device. */
+  function cmiRememberKey(){ return 'cmiRsvp:' + ((_event && _event.slug) || ''); }
+  function cmiRemember(status, name, email, data){
+    if(!_event) return;
+    try{
+      localStorage.setItem(cmiRememberKey(), JSON.stringify({
+        status: status, name: name, email: email,
+        guests: guests,
+        note: $('note').value.trim(),
+        volunteer: $('volunteer').checked,
+        volunteer_note: $('volunteer').checked ? $('volunteerNote').value.trim() : '',
+        member: _cmiPicked || null,
+        /* Keep the row's own token so a re-submit updates THAT row instead of
+           depending on the typed email still matching. */
+        edit_token: (data && data.edit_token) || _editToken || '',
+        at: Date.now()
+      }));
+    }catch(e){ /* private mode, quota: remembering is a nicety, never fatal */ }
+  }
+  function cmiForget(){
+    try{ localStorage.removeItem(cmiRememberKey()); }catch(e){}
+    location.href = location.pathname + (_event ? '?event=' + encodeURIComponent(_event.slug) : '');
+  }
+  function cmiRestore(){
+    if(!_event) return;
+    /* An emailed edit link names a row on the server and is the stronger
+       claim. Never let device memory override it. */
+    if(_editToken) return;
+    let saved = null;
+    try{ saved = JSON.parse(localStorage.getItem(cmiRememberKey()) || 'null'); }catch(e){}
+    if(!saved || !saved.status) return;
+
+    const r = document.querySelector('input[name=status][value="' + saved.status + '"]');
+    if(r){ r.checked = true; r.dispatchEvent(new Event('change', { bubbles:true })); }
+    if(saved.name)  $('name').value  = saved.name;
+    if(saved.email) $('email').value = saved.email;
+    if(saved.note)  $('note').value  = saved.note;
+    if(saved.status !== 'no' && saved.guests) setGuests(saved.guests);
+    if(saved.volunteer){
+      $('volunteer').checked = true;
+      $('volunteer').dispatchEvent(new Event('change', { bubbles:true }));
+      if(saved.volunteer_note) $('volunteerNote').value = saved.volunteer_note;
+    }
+    if(saved.member && saved.member.member_number){
+      _cmiPicked = saved.member;
+      const box = $('cdPicked');
+      box.style.display = '';
+      box.innerHTML = '<span>✓ ' + esc(saved.member.name) + ' · APA #' + esc(saved.member.member_number) + '</span>'
+        + '<button type="button" id="cdClear">Not you?</button>';
+      $('cdClear').addEventListener('click', cmiClearPick);
+    }
+    if(saved.edit_token) _editToken = saved.edit_token;
+
+    /* Visible, never silent. On a shared device the next person must be able
+       to see whose answer this is and clear it in one tap. */
+    const word = saved.status === 'no' ? 'can’t make it'
+               : saved.status === 'maybe' ? 'a maybe' : 'coming';
+    const b = $('cmiBackBanner');
+    b.style.display = '';
+    b.innerHTML = '<strong>Welcome back' + (saved.name ? ', ' + esc(saved.name.split(/\s+/)[0]) : '') + '.</strong> '
+      + 'We have you down as <strong>' + word + '</strong>'
+      + (saved.status !== 'no' && saved.guests > 1 ? ', party of ' + saved.guests : '')
+      + '. Change anything below and send it again, or '
+      + '<a href="#" id="cmiForgetLink">start fresh</a>.';
+    $('cmiForgetLink').addEventListener('click', function(ev){ ev.preventDefault(); cmiForget(); });
+  }
+
   form.addEventListener('submit', async e => {
     e.preventDefault();
     ['statusErr','nameErr','emailErr'].forEach(id => $(id).textContent = '');
@@ -598,6 +670,7 @@
       }) });
       const data = await r.json();
       if(data && data.ok){
+        cmiRemember(status, name, email, data);
         form.style.display = 'none';
         renderSuccess(status, name, data);
       }else{
