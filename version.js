@@ -10,4 +10,4 @@
            4) UPDATE apa_core.apps SET version=$NEW WHERE app_name='CountMeIn'.
    (serve-then-bump — see reference_deploy.md.)
    ════════════════════════════════════════════════════════════════════════ */
-window.APP_VERSION = '1.0';
+window.APP_VERSION = '1.1';

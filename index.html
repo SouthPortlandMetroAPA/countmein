@@ -140,6 +140,11 @@
                 align-items:center; justify-content:space-between; }
   .cd-picked button { background:none; border:0; color:#b8001f; font-weight:700;
                       cursor:pointer; font-size:.85rem; padding:2px 6px; }
+  .rc-check { display:flex; align-items:center; gap:10px; cursor:pointer;
+              padding:12px 14px; border:1px solid #d7dbe0; border-radius:10px;
+              background:#fbfbfc; font-weight:600; }
+  .rc-check input { width:20px; height:20px; margin:0; flex:0 0 auto; }
+  .rc-check:hover { background:#f3f4f6; }
 </style>
 </head>
 <body>
@@ -199,6 +204,16 @@
           <input type="hidden" id="guests" name="guests" value="0">
         </div>
 
+        <div id="volunteerWrap" class="rc-field" style="display:none">
+          <label class="rc-check">
+            <input type="checkbox" id="volunteer">
+            <span>I can help make this happen</span>
+          </label>
+          <div id="volunteerNoteWrap" style="display:none;margin-top:8px">
+            <label class="rc-label" for="volunteerNote">What could you help with? <span class="opt">(optional)</span></label>
+            <input type="text" id="volunteerNote" maxlength="200" placeholder="Setup, grilling, check-in, cleanup, whatever…">
+          </div>
+        </div>
         <label class="rc-label" for="note">Anything we should know? <span class="opt">(optional)</span></label>
         <textarea id="note" name="note" placeholder="Dietary needs, a note, a shout — totally optional" maxlength="2000"></textarea>
 
@@ -510,6 +525,22 @@
   // for compatibility, but party_size below is what the server trusts.
   let guests = 1;
   function setGuests(n){ guests = Math.max(1, Math.min(20, n)); $('guestsOut').textContent = guests; $('guests').value = guests; }
+  /* The volunteer ask only makes sense for someone who is coming. Hiding it
+     for a decline also keeps the flag and the status from ever disagreeing,
+     which the database CHECK enforces independently. */
+  function syncVolunteerVisibility() {
+    const st = (document.querySelector('input[name=status]:checked') || {}).value;
+    const show = st === 'yes' || st === 'maybe';
+    $('volunteerWrap').style.display = show ? '' : 'none';
+    if (!show) { $('volunteer').checked = false; $('volunteerNoteWrap').style.display = 'none'; }
+  }
+  document.querySelectorAll('input[name=status]').forEach(r =>
+    r.addEventListener('change', syncVolunteerVisibility));
+  $('volunteer').addEventListener('change', () => {
+    $('volunteerNoteWrap').style.display = $('volunteer').checked ? '' : 'none';
+    if ($('volunteer').checked) $('volunteerNote').focus();
+  });
+
   $('gMinus').addEventListener('click', () => setGuests(guests - 1));
   $('gPlus').addEventListener('click', () => setGuests(guests + 1));
   document.querySelectorAll('input[name=status]').forEach(r => r.addEventListener('change', () => {
@@ -554,6 +585,8 @@
         edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
         event_slug: (_event && _event.slug) || '',   // the event the page rendered — never "newest active"
         member_number: _cmiPicked ? _cmiPicked.member_number : '',
+        volunteer: $('volunteer').checked,
+        volunteer_note: $('volunteer').checked ? $('volunteerNote').value.trim() : '',
         hp: $('company').value, ft: Date.now() - LOAD_TIME,
         /* Preprod writes to the PRODUCTION table — there is no separate
            database. Stamping the source is what makes a test row findable
