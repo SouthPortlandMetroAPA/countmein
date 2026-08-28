@@ -123,6 +123,23 @@
   #updateOverlay .sp{ width:42px; height:42px; border:4px solid #e5e7eb; border-top-color:var(--spm-primary);
     border-radius:50%; animation:rcspin 1s linear infinite; }
   @keyframes rcspin{ to{ transform:rotate(360deg); } }
+  /* Player picker — mirrors the .cd-* picker used in Slate so the control
+     behaves the same everywhere it appears. */
+  .cd-search input { width:100%; }
+  .cd-ac { display:none; position:absolute; left:0; right:0; top:100%; z-index:40;
+           background:#fff; border:1px solid #d7dbe0; border-radius:10px; margin-top:4px;
+           box-shadow:0 8px 24px rgba(0,0,0,.12); max-height:260px; overflow:auto; }
+  .cd-ac.show { display:block; }
+  .cd-ac-item { padding:10px 12px; cursor:pointer; border-bottom:1px solid #f1f3f5; }
+  .cd-ac-item:last-child { border-bottom:0; }
+  .cd-ac-item:hover, .cd-ac-item.on { background:#f3f4f6; }
+  .cd-ac-name { font-weight:700; font-size:.95rem; }
+  .cd-ac-sub  { font-size:.78rem; color:#6b7280; margin-top:1px; }
+  .cd-picked  { margin-top:8px; padding:8px 10px; border-radius:8px; background:#eef6ee;
+                border:1px solid #cfe3cf; font-size:.9rem; display:flex; gap:8px;
+                align-items:center; justify-content:space-between; }
+  .cd-picked button { background:none; border:0; color:#b8001f; font-weight:700;
+                      cursor:pointer; font-size:.85rem; padding:2px 6px; }
 </style>
 </head>
 <body>
@@ -155,6 +172,13 @@
         </fieldset>
 
         <div id="identityLocked" class="rc-fact" style="display:none;margin:14px 0 2px"></div>
+        <label class="rc-label" for="cdSearch">Find yourself <span class="opt">(optional — helps us match your RSVP)</span></label>
+        <div class="cd-search" style="position:relative;margin-bottom:14px">
+          <input type="text" id="cdSearch" autocomplete="off" placeholder="Your name or APA number">
+          <div id="cdAc" class="cd-ac"></div>
+          <div id="cdPicked" class="cd-picked" style="display:none"></div>
+        </div>
+
         <label class="rc-label" for="name">Your name <span class="req">*</span></label>
         <input type="text" id="name" name="name" autocomplete="name" placeholder="First and last" required>
         <div class="err" id="nameErr" role="alert" aria-live="assertive"></div>
@@ -399,6 +423,87 @@
     }
   }
 
+  /* ── Self-identify picker ──────────────────────────────────────────
+     Optional by design. Backed by countmein.member_lookup, whose RETURNS
+     TABLE is a five-column allowlist — no address or phone can come back
+     through it. Picking fills the name field and keys the RSVP to a
+     member_number; the server re-validates that number and ignores it if it
+     does not resolve, so nothing here is trusted as a fact. */
+  let _cmiPicked = null, _cmiAc = [], _cmiTimer = null, _cmiFocus = -1;
+
+  function cmiPickerName(p) {
+    const nm = [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || '(no name)';
+    const nick = p.nickname && p.nickname !== p.first_name ? ' “' + p.nickname + '”' : '';
+    return nm + nick;
+  }
+  function cmiEsc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+  function cmiCloseAc() { const b = $('cdAc'); if (b) b.classList.remove('show'); }
+
+  async function cmiPickerSearch(q) {
+    const r = await fetch(SB_URL + '/rest/v1/rpc/member_lookup', {
+      method: 'POST',
+      headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Content-Type': 'application/json',
+                 'Content-Profile': 'countmein', 'Accept-Profile': 'countmein' },
+      body: JSON.stringify({ p_q: q })
+    });
+    if (!r.ok) return [];
+    return await r.json();
+  }
+  function cmiRenderAc() {
+    const box = $('cdAc');
+    if (!_cmiAc.length) {
+      box.innerHTML = '<div class="cd-ac-item" style="cursor:default;color:#6b7280">No matches — just type your name below.</div>';
+      box.classList.add('show'); return;
+    }
+    box.innerHTML = _cmiAc.map((p, i) =>
+      '<div class="cd-ac-item' + (i === _cmiFocus ? ' on' : '') + '" data-i="' + i + '">'
+      + '<div class="cd-ac-name">' + cmiEsc(cmiPickerName(p)) + '</div>'
+      + '<div class="cd-ac-sub">APA #' + cmiEsc(p.member_number)
+      + (p.team_name ? ' · ' + cmiEsc(p.team_name) : '') + '</div></div>').join('');
+    [...box.querySelectorAll('.cd-ac-item[data-i]')].forEach(el =>
+      el.addEventListener('mousedown', e => { e.preventDefault(); cmiPick(+el.dataset.i); }));
+    box.classList.add('show');
+  }
+  function cmiPick(i) {
+    const p = _cmiAc[i]; if (!p) return;
+    _cmiPicked = { member_number: p.member_number, name: cmiPickerName(p) };
+    cmiCloseAc();
+    $('cdSearch').value = '';
+    /* Fill the name only when the guest has not typed their own. Their
+       wording wins over the roster's. */
+    if (!$('name').value.trim()) $('name').value = [p.first_name, p.last_name].filter(Boolean).join(' ').trim();
+    const box = $('cdPicked');
+    box.style.display = '';
+    box.innerHTML = '<span>✓ ' + cmiEsc(_cmiPicked.name) + ' · APA #' + cmiEsc(p.member_number) + '</span>'
+      + '<button type="button" id="cdClear">Not you?</button>';
+    $('cdClear').addEventListener('click', cmiClearPick);
+  }
+  function cmiClearPick() {
+    _cmiPicked = null;
+    const box = $('cdPicked'); box.style.display = 'none'; box.innerHTML = '';
+    $('cdSearch').value = ''; cmiCloseAc(); $('cdSearch').focus();
+  }
+  (function cmiWirePicker() {
+    const input = $('cdSearch'); if (!input) return;
+    input.addEventListener('input', () => {
+      clearTimeout(_cmiTimer);
+      const v = input.value.trim();
+      if (v.length < 2) { cmiCloseAc(); return; }
+      _cmiTimer = setTimeout(async () => {
+        try { _cmiAc = await cmiPickerSearch(v); _cmiFocus = -1; cmiRenderAc(); }
+        catch (e) { cmiCloseAc(); }
+      }, 250);
+    });
+    input.addEventListener('keydown', e => {
+      if (!$('cdAc').classList.contains('show')) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); _cmiFocus = Math.min(_cmiAc.length - 1, _cmiFocus + 1); cmiRenderAc(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); _cmiFocus = Math.max(0, _cmiFocus - 1); cmiRenderAc(); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (_cmiFocus >= 0) cmiPick(_cmiFocus); }
+      else if (e.key === 'Escape') cmiCloseAc();
+    });
+    document.addEventListener('click', e => { if (!e.target.closest('.cd-search')) cmiCloseAc(); });
+  })();
+
   /* ── Guest stepper + reveal ── */
   // The stepper now counts TOTAL people INCLUDING the person RSVPing, so the
   // floor is 1 and the value IS the party size. The wire field stays 'guests'
@@ -448,6 +553,7 @@
         token: (_s && _s.token) || '',   // when the event requires login, the server verifies this + uses its identity
         edit_token: _editToken || '',    // per-RSVP edit link: updates THIS row even if the email typed differs
         event_slug: (_event && _event.slug) || '',   // the event the page rendered — never "newest active"
+        member_number: _cmiPicked ? _cmiPicked.member_number : '',
         hp: $('company').value, ft: Date.now() - LOAD_TIME,
         /* Preprod writes to the PRODUCTION table — there is no separate
            database. Stamping the source is what makes a test row findable
