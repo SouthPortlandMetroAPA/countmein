@@ -176,6 +176,18 @@
           <div class="err" id="statusErr" role="alert" aria-live="assertive"></div>
         </fieldset>
 
+        <div id="volunteerWrap" class="rc-field" style="display:none">
+          <label class="rc-check">
+            <input type="checkbox" id="volunteer">
+            <span>I can help make this happen</span>
+          </label>
+          <div id="volunteerNoteWrap" style="display:none;margin-top:8px">
+            <label class="rc-label" for="volunteerNote">What could you help with? <span class="opt">(optional)</span></label>
+            <input type="text" id="volunteerNote" maxlength="200" placeholder="Setup, grilling, check-in, cleanup, whatever…">
+          </div>
+        </div>
+
+
         <div id="identityLocked" class="rc-fact" style="display:none;margin:14px 0 2px"></div>
         <label class="rc-label" for="cdSearch">Find yourself <span class="opt">(optional — helps us match your RSVP)</span></label>
         <div class="cd-search" style="position:relative;margin-bottom:14px">
@@ -204,17 +216,7 @@
           <input type="hidden" id="guests" name="guests" value="0">
         </div>
 
-        <div id="volunteerWrap" class="rc-field" style="display:none">
-          <label class="rc-check">
-            <input type="checkbox" id="volunteer">
-            <span>I can help make this happen</span>
-          </label>
-          <div id="volunteerNoteWrap" style="display:none;margin-top:8px">
-            <label class="rc-label" for="volunteerNote">What could you help with? <span class="opt">(optional)</span></label>
-            <input type="text" id="volunteerNote" maxlength="200" placeholder="Setup, grilling, check-in, cleanup, whatever…">
-          </div>
-        </div>
-        <label class="rc-label" for="note">Anything we should know? <span class="opt">(optional)</span></label>
+                <label class="rc-label" for="note">Anything we should know? <span class="opt">(optional)</span></label>
         <textarea id="note" name="note" placeholder="Dietary needs, a note, a shout — totally optional" maxlength="2000"></textarea>
 
         <!-- honeypot: off-screen (not display:none), humans never see or fill it -->
