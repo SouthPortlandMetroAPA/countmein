@@ -45,6 +45,7 @@
 <meta name="theme-color" content="#ea002a">
 <link rel="stylesheet" href="https://southportlandmetroapa.github.io/shared/spm-base.css">
 <script src="version.js"></script>
+<script src="https://southportlandmetroapa.github.io/shared/spm-auth.js"></script>
 <style>
   /* App-specific bits over the shared SPM brand (tokens from spm-base.css:
      --spm-primary #ea002a, --spm-accent #0031a1, --text, --muted, --border). */
@@ -313,9 +314,15 @@
   }
 
   /* ── APA-login gate (only when the event has require_apa_login) ── */
-  const CMI_SKEY = 'countmein_session';
-  function cmiSession(){ try{ return JSON.parse(localStorage.getItem(CMI_SKEY) || 'null'); }catch(e){ return null; } }
-  function cmiSetSession(s){ try{ localStorage.setItem(CMI_SKEY, JSON.stringify(s)); }catch(e){} }
+  /* Session token lives in the SHARED key via spm-auth.js (SSO, 2026-09-18). The name/email card is cached per token
+     under countmein_identity and re-derived (cmi_verify) whenever the shared token changes. */
+  const CMI_IKEY = 'countmein_identity';
+  function cmiSession(){ try{ const tok = spmAuth.get(); if(!tok) return null; const c = JSON.parse(localStorage.getItem(CMI_IKEY) || 'null'); return (c && c.token === tok) ? c : { token: tok, name: '', email: '', first: '' }; }catch(e){ return null; } }
+  function cmiSetSession(s){ try{ if(s && s.token){ spmAuth.set(s.token); localStorage.setItem(CMI_IKEY, JSON.stringify(s)); } }catch(e){} }
+  async function cmiEnsureIdentity(){ const tok = spmAuth.get(); if(!tok) return; let c = null; try{ c = JSON.parse(localStorage.getItem(CMI_IKEY) || 'null'); }catch(e){}
+    if(c && c.token === tok && c.email) return;
+    const res = await cmiPost({ action:'cmi_verify', token: tok });
+    if(res && res.ok) cmiSetSession({ token: tok, name: res.name||'', email: res.email||'', first: res.first_name||'' }); else if(spmAuth.isAuthErr(res && res.error)) spmAuth.clear(); }
   async function cmiPost(payload){ try{ const r = await fetch(GAS_URL, { method:'POST', body: JSON.stringify(payload) }); return await r.json(); }catch(e){ return { ok:false, error:'network' }; } }
   // Magic-link boot: if a ?token is present, verify it, store the session, strip it from the URL.
   async function cmiVerifyTokenIfPresent(){
@@ -774,7 +781,8 @@
   }
 
   // Verify a magic-link ?token first (stores the session + cleans the URL), then load.
-  (async () => { await cmiVerifyTokenIfPresent(); await cmiLoadEditIfPresent(); await loadEvent(); cmiApplyEditRow(); })();
+  spmAuth.onChange(function(){ location.reload(); });   /* SSO: another app signed in/out */
+  (async () => { await cmiVerifyTokenIfPresent(); await cmiEnsureIdentity(); await cmiLoadEditIfPresent(); await loadEvent(); cmiApplyEditRow(); })();
   setInterval(checkVersion, 30000);
 </script>
 </body>
