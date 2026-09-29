@@ -784,6 +784,55 @@
   spmAuth.onChange(function(){ location.reload(); });   /* SSO: another app signed in/out */
   (async () => { await cmiVerifyTokenIfPresent(); await cmiEnsureIdentity(); await cmiLoadEditIfPresent(); await loadEvent(); cmiApplyEditRow(); })();
   setInterval(checkVersion, 30000);
+
+  /* ── Live data refresh (apa_core.app_pulse) ────────────────────────────────────────────────────────
+     House rule: an open page whose data changes must poll and re-render, with version updates kept
+     separate. The pulse is one opaque hash over what THIS page shows; we re-render only when it moves,
+     never while the tab is hidden, and the first sample only seeds so a fresh load never flashes. */
+  var _dataPulse = null;
+  async function fetchDataPulse() {
+    var key = (_event && _event.slug) || 'index';
+    if (!key) return null;
+    try {
+      var r = await fetch(SB_URL + '/rest/v1/rpc/app_pulse', {
+        method: 'POST',
+        headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Content-Type': 'application/json',
+                   'Accept-Profile': 'apa_core', 'Content-Profile': 'apa_core' },
+        body: JSON.stringify({ p_app: 'countmein', p_key: String(key) })
+      });
+      return r.ok ? await r.json() : null;
+    } catch (e) { return null; }
+  }
+  function dataPulseBusy() {
+      /* never yank the card out from under someone filling the form */
+      var ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+      var ac = document.getElementById('cdAc');
+      if (ac && ac.classList.contains('show')) return true;
+      return false;
+  }
+  async function pollDataPulse() {
+    if (document.hidden) return;
+    if (dataPulseBusy()) return;   /* skip WITHOUT storing, so the refresh lands once they are done */
+    var p = await fetchDataPulse();
+    if (p === null) return;
+    if (_dataPulse === null) { _dataPulse = p; return; }
+    if (p === _dataPulse) return;
+    _dataPulse = p;
+      try {
+        var params = new URLSearchParams(location.search);
+        var slugQ = params.get('event');
+        var filter = slugQ ? 'slug=eq.' + encodeURIComponent(slugQ) : 'active=eq.true';
+        var r = await fetch(SB_URL + '/rest/v1/events?' + filter + '&select=slug,name,subtitle,event_date,start_time,end_time,venue,address,description,rsvp_by,note_hint,require_apa_login,active&order=event_date.asc' + (slugQ ? '&limit=1' : ''),
+          { headers: { apikey: ANON, Authorization: 'Bearer ' + ANON, 'Accept-Profile': 'countmein' } });
+        var rows = await r.json();
+        if (!slugQ && Array.isArray(rows) && rows.length > 1) { _eventList = rows; _event = null; renderEventIndex(); return; }
+        _event = (Array.isArray(rows) && rows[0]) || null;
+        renderEvent();
+      } catch (e) { /* a failed refresh leaves the page exactly as it was */ }
+  }
+  setInterval(pollDataPulse, 30000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) pollDataPulse(); });
 </script>
 </body>
 </html>
